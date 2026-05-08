@@ -9,12 +9,26 @@ CYAN='\033[0;36m'
 PLAIN='\033[0m'
 
 # --- 全域變數 ---
+SCRIPT_URL="https://raw.githubusercontent.com/YouKap/alpxrm/main/xrm.sh" # 請確認此網址正確
 XRAY_BIN="/usr/local/bin/xray"
 XRAY_CONF="/usr/local/etc/xray/config.json"
 XRAY_ASSETS="/usr/local/share/xray"
 
 # 確保以 Root 權限執行
 [[ $EUID -ne 0 ]] && echo -e "${RED}錯誤: 必須以 root 執行！${PLAIN}" && exit 1
+
+# 自我安裝與執行環境校正 (確保環境具備所需套件，並將腳本全域化)
+if [[ "$0" != "/usr/local/bin/xrm" ]]; then
+    echo -e "${BLUE}>>> 正在同步腳本至全域環境並安裝基礎依賴...${PLAIN}"
+    apk update > /dev/null 2>&1
+    apk add --no-cache curl unzip nano procps bash dnsmasq iproute2 coreutils ca-certificates > /dev/null 2>&1
+    
+    curl -sSL "$SCRIPT_URL" -o /usr/local/bin/xrm
+    chmod +x /usr/local/bin/xrm
+    echo -e "${GREEN}>>> 環境初始化成功！未來可隨時輸入 'xrm' 呼叫面板。${PLAIN}"
+    sleep 1.5
+    exec /usr/local/bin/xrm
+fi
 
 # ==========================================
 # 核心功能模組
@@ -32,9 +46,6 @@ install_update_xray() {
         *) echo -e "${RED}不支援的架構: ${ARCH}${PLAIN}"; sleep 2; return ;;
     esac
 
-    # 安裝解壓工具
-    apk add --no-cache unzip curl > /dev/null 2>&1
-
     echo -e "${YELLOW}正在獲取最新版本號...${PLAIN}"
     VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep tag_name | cut -d '"' -f 4)
     [[ -z "$VERSION" ]] && VERSION="v24.11.30"
@@ -48,8 +59,8 @@ install_update_xray() {
         sleep 2; return
     fi
 
-    echo -e "${YELLOW}正在解壓並安裝...${PLAIN}"
-    unzip -o /tmp/xray/xray.zip -d /tmp/xray/
+    echo -e "${YELLOW}正在解壓並佈署文件...${PLAIN}"
+    unzip -o /tmp/xray/xray.zip -d /tmp/xray/ > /dev/null 2>&1
     
     mkdir -p /usr/local/bin /usr/local/etc/xray /usr/local/share/xray
     mv -f /tmp/xray/xray /usr/local/bin/xray
@@ -83,33 +94,13 @@ EOF
     read -rp "按 Enter 鍵返回..." dummy < /dev/tty
 }
 
-setup_dns_optimization() {
-    clear
-    echo -e "${BLUE}=== 🛡️ 系統 DNS 優化 (dnsmasq) ===${PLAIN}"
-    apk add --no-cache dnsmasq
-    
-    cat <<EOF > /etc/dnsmasq.conf
-port=53
-server=127.0.0.1#5300
-listen-address=127.0.0.1
-bind-interfaces
-no-resolv
-EOF
-
-    echo "nameserver 127.0.0.1" > /etc/resolv.conf
-    rc-update add dnsmasq default >/dev/null 2>&1
-    rc-service dnsmasq restart
-    echo -e "\n${GREEN}✅ DNS 集成優化成功 (53 -> 5300)${PLAIN}"
-    read -rp "按 Enter 鍵返回..." dummy < /dev/tty
-}
-
 edit_config() {
     clear
     echo -e "${BLUE}=== ⚙️ 2. 編輯 Xray 設定檔 ===${PLAIN}"
     if [ ! -f "$XRAY_BIN" ]; then echo -e "${RED}尚未安裝 Xray。${PLAIN}"; sleep 2; return; fi
-    
-    # 若檔案不存在則寫入預設配置
-    if [ ! -f "$XRAY_CONF" ]; then
+
+    # 完整補回你原先的設定檔邏輯
+    if [ ! -f "$XRAY_CONF" ] || [ $(stat -c%s "$XRAY_CONF" 2>/dev/null || echo 0) -lt 10 ]; then
         mkdir -p /usr/local/etc/xray
         cat <<EOF > "$XRAY_CONF"
 {
@@ -222,19 +213,32 @@ EOF
     fi
 
     nano "$XRAY_CONF" < /dev/tty
-    rc-service xray restart
-    read -rp "配置已保存並嘗試重啟，按 Enter 返回..." dummy < /dev/tty
+    echo -e "\n${YELLOW}正在檢測設定檔語法...${PLAIN}"
+    
+    TEST_RES=$(XRAY_LOCATION_ASSET=$XRAY_ASSETS "$XRAY_BIN" -test -config "$XRAY_CONF" 2>&1)
+    
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}✅ 語法正確！正在重啟服務...${PLAIN}"
+        rc-service xray restart > /dev/null 2>&1
+        sleep 0.5
+        rc-service xray status 2>/dev/null | grep -q "started" && echo -e "${GREEN}🚀 重啟成功。${PLAIN}"
+    else
+        echo -e "${RED}❌ 語法檢測失敗！${PLAIN}"
+        echo "$TEST_RES"
+    fi
+    read -rp "按 Enter 鍵返回主選單..." dummy < /dev/tty
 }
 
 manage_service() {
     clear
     echo -e "${BLUE}=== ⚡ 3. 服務管理 ===${PLAIN}"
     echo -e " 1. ${GREEN}啟動${PLAIN} | 2. ${RED}停止${PLAIN} | 3. ${YELLOW}重啟${PLAIN} | 0. 返回"
-    read -rp "選擇: " s < /dev/tty
+    read -rp "請選擇: " s < /dev/tty
     case $s in 
         1) rc-service xray start ;; 
         2) rc-service xray stop ;; 
         3) rc-service xray restart ;; 
+        0) return ;;
     esac
 }
 
@@ -246,29 +250,124 @@ show_status() {
     else
         echo -e "Xray 狀態: ${RED}停止${PLAIN}"
     fi
+    
+    if rc-service dnsmasq status 2>/dev/null | grep -q "started"; then
+        echo -e "DNS 優化: ${GREEN}已啟用 (dnsmasq 轉發中)${PLAIN}"
+    else
+        echo -e "DNS 優化: ${YELLOW}未啟用${PLAIN}"
+    fi
+    echo "-------------------------------------------------"
     read -rp "按 Enter 返回..." dummy < /dev/tty
 }
 
-# --- 主選單 ---
+setup_dns_optimization() {
+    clear
+    echo -e "${BLUE}=== 🛡️ 系統 DNS 優化 (dnsmasq 轉發) ===${PLAIN}"
+    echo -e "${YELLOW}正在配置 dnsmasq...${PLAIN}"
+    
+    # 確保 dnsmasq 安裝
+    apk add --no-cache dnsmasq > /dev/null 2>&1
+
+    cat <<EOF > /etc/dnsmasq.conf
+port=53
+server=127.0.0.1#5300
+listen-address=127.0.0.1
+bind-interfaces
+no-resolv
+EOF
+
+    echo "nameserver 127.0.0.1" > /etc/resolv.conf
+    
+    rc-update add dnsmasq default >/dev/null 2>&1
+    rc-service dnsmasq restart >/dev/null 2>&1
+    
+    echo -e "\n${GREEN}✅ DNS 集成優化成功！${PLAIN}"
+    echo -e "目前路徑: ${CYAN}系統應用 -> dnsmasq (:53) -> Xray (:5300) -> DoH${PLAIN}"
+    read -rp "按 Enter 鍵返回..." dummy < /dev/tty
+}
+
+check_dns_health() {
+    clear
+    echo -e "${BLUE}=== 🔍 DNS 鏈路實時診斷 ===${PLAIN}"
+    local errors=0
+
+    echo -n "1. 檢查 Xray DNS 監聽 (5300): "
+    if netstat -nlpu 2>/dev/null | grep -q ":5300"; then
+        echo -e "${GREEN}正常${PLAIN}"
+    else
+        echo -e "${RED}失敗 (Xray 未在 5300 監聽)${PLAIN}"; ((errors++))
+    fi
+
+    echo -n "2. 檢查 dnsmasq 運行狀態: "
+    if rc-service dnsmasq status 2>/dev/null | grep -q "started"; then
+        echo -e "${GREEN}運行中${PLAIN}"
+    else
+        echo -e "${RED}未運行${PLAIN}"; ((errors++))
+    fi
+
+    echo -n "3. 測試本機實時解析 (google.com): "
+    if nslookup google.com 127.0.0.1 > /dev/null 2>&1; then
+        echo -e "${GREEN}成功 (解析鏈路通暢)${PLAIN}"
+    else
+        if nslookup cloudflare.com 127.0.0.1 > /dev/null 2>&1; then
+            echo -e "${GREEN}成功 (解析鏈路通暢)${PLAIN}"
+        else
+            echo -e "${RED}失敗 (無法從 Xray 獲取數據)${PLAIN}"; ((errors++))
+        fi
+    fi
+
+    echo -e "-------------------------------------------------"
+    if [ $errors -eq 0 ]; then
+        echo -e "${GREEN}🎉 自檢通過！系統網路與 DNS 運作正常。${PLAIN}"
+    else
+        echo -e "${RED}❌ 檢測到 $errors 處異常，請檢查配置。${PLAIN}"
+    fi
+    read -rp "按 Enter 鍵返回主選單..." dummy < /dev/tty
+}
+
+uninstall_xray() {
+    clear
+    echo -e "${RED}=== ⚠️ 徹底卸載 Xray ===${PLAIN}"
+    read -rp "確定要刪除所有元件與設定嗎？(y/N): " c < /dev/tty
+    if [[ "$c" == "y" || "$c" == "Y" ]]; then
+        rc-service xray stop >/dev/null 2>&1
+        rc-update del xray default >/dev/null 2>&1
+        rm -rf /usr/local/bin/xray /usr/local/etc/xray /usr/local/share/xray /etc/init.d/xray
+        rm -f /var/log/xray.log /var/log/xray_error.log
+        echo -e "${GREEN}✅ 卸載完成。${PLAIN}"
+        sleep 2; exit 0
+    fi
+}
+
+# ==========================================
+# 主介面循環
+# ==========================================
 while true; do
     clear
     [[ -f "$XRAY_BIN" ]] && STATUS="${GREEN}(已安裝)${PLAIN}" || STATUS="${RED}(未安裝)${PLAIN}"
     echo -e "${BLUE}=================================================${PLAIN}"
-    echo -e "   🚀 ${CYAN}Xray 管理面板 (xrm) [Alpine 2版]${PLAIN}   $STATUS"
+    echo -e "   🚀 ${CYAN}Xray 管理面板 (xrm) [Alpine 版]${PLAIN}   $STATUS"
     echo -e "${BLUE}=================================================${PLAIN}"
     echo -e "${YELLOW} 1.${PLAIN} 安裝/更新 Xray" 
     echo -e "${YELLOW} 2.${PLAIN} 編輯 Xray 設定"
     echo -e "${YELLOW} 3.${PLAIN} 服務管理" 
     echo -e "${YELLOW} 4.${PLAIN} 狀態監控"
-    echo -e "${GREEN} 6. 系統 DNS 優化 (dnsmasq)${PLAIN}"
+    echo -e "${GREEN} 6. 系統 DNS 優化 (集成 dnsmasq 轉發)${PLAIN}"
+    echo -e "${CYAN} 7. 一鍵診斷 DNS 狀態${PLAIN}"
+    echo -e "-------------------------------------------------"
+    echo -e "${RED} 5.${PLAIN} 徹底卸載"
     echo -e "${YELLOW} 0.${PLAIN} 退出"
+    
     read -rp "請選擇: " choice < /dev/tty
+    
     case $choice in
         1) install_update_xray ;; 
         2) edit_config ;; 
         3) manage_service ;; 
         4) show_status ;; 
-        6) setup_dns_optimization ;;
-        0) exit 0 ;;
+        5) uninstall_xray ;; 
+        6) setup_dns_optimization ;; 
+        7) check_dns_health ;;
+        0) clear; exit 0 ;;
     esac
 done
