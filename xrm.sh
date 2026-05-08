@@ -35,13 +35,42 @@ fi
 
 install_update_xray() {
     clear
-    echo -e "${BLUE}=== 📦 安裝/更新 Xray-core (含數據文件) ===${PLAIN}"
-    echo -e "${YELLOW}正在執行官方安裝程序...${PLAIN}"
+    echo -e "${BLUE}=== 📦 安裝/更新 Xray-core (Alpine 手動版) ===${PLAIN}"
     
-    # 官方腳本支援 Alpine，但我們需要手動確保 OpenRC 腳本正確建立
-    bash <(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)
+    # 1. 偵測架構
+    ARCH=$(uname -m)
+    case ${ARCH} in
+        x86_64)  PLATFORM="64" ;;
+        aarch64) PLATFORM="arm64-v8a" ;;
+        *) echo -e "${RED}不支援的架構: ${ARCH}${PLAIN}"; sleep 2; return ;;
+    esac
+
+    echo -e "${YELLOW}正在獲取最新版本號...${PLAIN}"
+    VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep tag_name | cut -d '"' -f 4)
+    if [ -z "$VERSION" ]; then VERSION="v24.11.30"; fi # 備用版本號
     
-    # 強制覆寫/建立 OpenRC 專用的 Xray 服務檔
+    echo -e "${YELLOW}正在下載 Xray-core ${VERSION} (${ARCH})...${PLAIN}"
+    mkdir -p /tmp/xray
+    curl -L "https://github.com/XTLS/Xray-core/releases/download/${VERSION}/Xray-linux-${PLATFORM}.zip" -o /tmp/xray/xray.zip
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}下載失敗，請檢查網路連線。${PLAIN}"
+        sleep 2; return
+    fi
+
+    echo -e "${YELLOW}正在解壓並安裝...${PLAIN}"
+    unzip -o /tmp/xray/xray.zip -d /tmp/xray/
+    
+    # 建立目錄並移動檔案
+    mkdir -p /usr/local/bin /usr/local/etc/xray /usr/local/share/xray
+    mv -f /tmp/xray/xray /usr/local/bin/xray
+    mv -f /tmp/xray/geoip.dat /usr/local/share/xray/geoip.dat
+    mv -f /tmp/xray/geosite.dat /usr/local/share/xray/geosite.dat
+    chmod +x /usr/local/bin/xray
+    rm -rf /tmp/xray
+
+    # 2. 建立 OpenRC 服務腳本
+    echo -e "${YELLOW}正在配置 OpenRC 服務...${PLAIN}"
     cat <<EOF > /etc/init.d/xray
 #!/sbin/openrc-run
 name="xray"
@@ -60,8 +89,9 @@ depend() {
 EOF
     chmod +x /etc/init.d/xray
     rc-update add xray default >/dev/null 2>&1
-
-    echo -e "\n${GREEN}✅ 安裝/更新成功！(已適配 OpenRC)${PLAIN}"
+    
+    echo -e "\n${GREEN}✅ Xray-core 安裝完成！${PLAIN}"
+    echo -e "版本: ${CYAN}${VERSION}${PLAIN}"
     read -rp "按 Enter 鍵返回..." dummy < /dev/tty
 }
 
