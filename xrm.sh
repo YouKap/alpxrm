@@ -113,9 +113,15 @@ edit_config() {
         mkdir -p /usr/local/etc/xray
         cat <<EOF > "$XRAY_CONF"
 {
-  "log": {"loglevel": "none"},
+  "log": {
+    "loglevel": "none"
+  },
   "dns": {
-    "servers": ["https://1.1.1.1/dns-query"],
+    "servers": [
+      "https://1.1.1.1/dns-query",
+      "https://8.8.8.8/dns-query"
+    ],
+    "queryStrategy": "UseIPv4",
     "tag": "dns-internal"
   },
   "inbounds": [
@@ -124,10 +130,93 @@ edit_config() {
       "port": 5300,
       "listen": "127.0.0.1",
       "protocol": "dokodemo-door",
-      "settings": {"address": "1.1.1.1", "port": 53, "network": "udp"}
+      "settings": {
+        "address": "1.1.1.1",
+        "port": 53,
+        "network": "udp"
+      }
+    },
+    {
+      "port": 52880,
+      "listen": "127.0.0.1",
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "1cb88fed-057a-40d0-9341-94e53f3c5371"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": {
+          "path": "/2UdBFrva7BrM1zLxT"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      }
     }
   ],
-  "outbounds": [{"protocol": "freedom", "tag": "direct"}]
+  "outbounds": [
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIPv4"
+      }
+    },
+    {
+      "tag": "dns-out",
+      "protocol": "dns"
+    },
+    {
+      "tag": "block",
+      "protocol": "blackhole",
+      "settings": {
+        "response": {
+          "type": "none"
+        }
+      }
+    }
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["dns-in"],
+        "outboundTag": "dns-out"
+      },
+      {
+        "type": "field",
+        "protocol": ["dns"],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "port": 443,
+        "network": "udp",
+        "outboundTag": "block"
+      },
+      {
+        "type": "field",
+        "ip": ["geoip:private"],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "outboundTag": "direct"
+      }
+    ]
+  }
 }
 EOF
     fi
@@ -165,7 +254,7 @@ while true; do
     clear
     [[ -f "$XRAY_BIN" ]] && STATUS="${GREEN}(已安裝)${PLAIN}" || STATUS="${RED}(未安裝)${PLAIN}"
     echo -e "${BLUE}=================================================${PLAIN}"
-    echo -e "   🚀 ${CYAN}Xray 管理面板 (xrm) [Alpine 1版]${PLAIN}   $STATUS"
+    echo -e "   🚀 ${CYAN}Xray 管理面板 (xrm) [Alpine 2版]${PLAIN}   $STATUS"
     echo -e "${BLUE}=================================================${PLAIN}"
     echo -e "${YELLOW} 1.${PLAIN} 安裝/更新 Xray" 
     echo -e "${YELLOW} 2.${PLAIN} 編輯 Xray 設定"
