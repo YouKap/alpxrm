@@ -274,6 +274,7 @@ server=127.0.0.1#5300
 listen-address=127.0.0.1
 bind-interfaces
 no-resolv
+cache-size=2048
 EOF
 
     echo "nameserver 127.0.0.1" > /etc/resolv.conf
